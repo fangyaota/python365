@@ -47,6 +47,16 @@ print("    [client] 走到末尾", flush=True)
 '''
 
 
+ADMIN_TOKEN = "lab-admin-token"          # /state 是管理接口，需要认证
+
+
+def fetch_state() -> dict:
+    req = urllib.request.Request(f"{SERVER}/state",
+                                 headers={"X-Admin-Token": ADMIN_TOKEN})
+    with urllib.request.urlopen(req, timeout=2.0) as r:
+        return json.loads(r.read())
+
+
 def env(**extra) -> dict:
     e = dict(os.environ)
     e["PYTHONPATH"] = PY365
@@ -71,13 +81,12 @@ def issue_license(spec: str = "DATA,BASIC") -> str:
 
 
 def start_server() -> subprocess.Popen:
-    e = dict(os.environ, PYTHON365_LEASE_TTL=str(TTL))
+    e = dict(os.environ, PYTHON365_LEASE_TTL=str(TTL), PYTHON365_ADMIN_TOKEN=ADMIN_TOKEN)
     p = subprocess.Popen([sys.executable, os.path.join(ROOT, "vendor", "authd.py"), str(PORT)],
                          env=e, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     for _ in range(40):
         try:
-            with urllib.request.urlopen(f"{SERVER}/state", timeout=0.5) as r:
-                json.loads(r.read())
+            fetch_state()
             return p
         except Exception:                                    # noqa: BLE001
             time.sleep(0.25)
@@ -99,8 +108,7 @@ def main() -> None:
     print("═══ 启动厂商授权服务端 ═══")
     server = start_server()
     try:
-        with urllib.request.urlopen(f"{SERVER}/state", timeout=2) as r:
-            st = json.loads(r.read())
+        st = fetch_state()
         print(f"  服务端就绪：租约 {st['lease_ttl']}s，设备 {len(st['devices'])} 台")
         lic = issue_license()
         print(f"  厂商签发许可证：{lic[:44]}…（私钥只在服务端进程里）")
@@ -143,8 +151,7 @@ def main() -> None:
     head("⑤ 诚实边界：指纹是**客户端自报**的 → 冒用已绑定指纹可白嫖")
     server2 = start_server()
     try:
-        with urllib.request.urlopen(f"{SERVER}/state", timeout=2) as r:
-            bound = json.loads(r.read())["devices"]
+        bound = fetch_state()["devices"]
         real_fp = list(bound.values())[0] if bound else "?"
         print(f"  服务端记的绑定指纹：{real_fp}")
         os.remove(LEASE_FILE) if os.path.exists(LEASE_FILE) else None

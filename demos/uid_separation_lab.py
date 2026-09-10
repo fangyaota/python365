@@ -42,6 +42,16 @@ KEY = os.path.join(KEYDIR, "private_key.json")
 HIDDEN = "/tmp/.key_hidden_during_test"
 
 
+ADMIN_TOKEN = "lab-admin-token"          # /state 是管理接口，需要认证
+
+
+def fetch_state() -> dict:
+    req = urllib.request.Request(f"{SERVER}/state",
+                                 headers={"X-Admin-Token": ADMIN_TOKEN})
+    with urllib.request.urlopen(req, timeout=2.0) as r:
+        return json.loads(r.read())
+
+
 def head(t: str) -> None:
     print(f"\n{'─' * 66}\n▶ {t}")
 
@@ -79,8 +89,7 @@ def wait_server(proc, timeout: float = 10.0) -> bool:
         if proc.poll() is not None:
             return False
         try:
-            with urllib.request.urlopen(f"{SERVER}/state", timeout=0.5) as r:
-                json.loads(r.read())
+            fetch_state()
             return True
         except Exception:                                    # noqa: BLE001
             time.sleep(0.25)

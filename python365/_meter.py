@@ -113,6 +113,30 @@ def cpu_wall(limit: float, used: float) -> None:
 # ══════════════════════════════════════════════════════════════════════
 #  计费账户 —— 状态与执法动作都住在闭包里
 # ══════════════════════════════════════════════════════════════════════
+def make_syntax_hook(*, trust, paywall=paywall):
+    """
+    CORE 语法包闸门 —— **必须独立于计费钩子**。
+
+    第五轮 R5-11：语法检查原来住在 `hook_call` 里，而那个钩子**只在免费版注册**
+    （付费版走零开销路线）—— 于是任何买了别的档位的客户，哪怕没买 CORE，
+    lambda / 生成器 / async 一律免费。¥9/月的语法包事实上只对免费用户存在。
+
+    现在它是一个自己注册的钩子：只要 CORE 未购就装上，无论免费还是付费。
+    """
+    def hook() -> None:
+        f = trust.user_frame()
+        if f is None or trust.is_internal_frame(f):
+            return
+        if trust.trust_level(f) != 0:            # 只收用户亲手写的代码
+            return
+        code = f.f_code
+        if code.co_name == "<lambda>":
+            paywall("λ 匿名函数", "CORE", "语言特性按版本收费")
+        if code.co_flags & (0x20 | 0x200):       # CO_GENERATOR | CO_ASYNC_GENERATOR
+            paywall("生成器 yield / async", "CORE", "语言特性按版本收费")
+    return hook
+
+
 def make_account(*, free_quota: int, cpu_quota: float, syntax_gate: bool, trust,
                  tamper=None, verify_topup=None, owned_intact=None,
                  lease_check=None, lease_fail=None,

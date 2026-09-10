@@ -51,6 +51,30 @@ def lic_id(license_token: str) -> str:
     return hashlib.sha256(license_token.strip().encode()).hexdigest()[:16]
 
 
+def license_info(license_token: str) -> tuple[list[str], str] | None:
+    """验签 + 返回 (授权档, 到期日)。客户端说什么都不算 —— 服务端自己验。"""
+    try:
+        head, payload_b64, sig_b64 = license_token.strip().split(".")
+        if head != "PYTHON365":
+            return None
+        payload = base64.urlsafe_b64decode(payload_b64 + "==")
+        sig = base64.urlsafe_b64decode(sig_b64 + "==")
+    except Exception:                                        # noqa: BLE001
+        return None
+    n, e, _d = load_private_key()
+    digest = int.from_bytes(hashlib.sha256(payload).digest()[:12], "big") % n
+    if pow(int.from_bytes(sig, "big"), e, n) != digest:
+        return None
+    try:
+        tier_field, expiry = payload.decode().split("|")
+    except Exception:                                        # noqa: BLE001
+        return None
+    if expiry < time.strftime("%Y%m%d"):
+        return None
+    tiers = [t.strip().upper() for t in tier_field.split(",") if t.strip()]
+    return (tiers, expiry) if tiers else None
+
+
 def license_tiers(license_token: str) -> list[str] | None:
     """
     服务端自己验一遍许可证 —— 客户端说什么都不算。
@@ -95,8 +119,15 @@ class Store:
         with open(self.path, "w") as fh:
             json.dump(self.data, fh, indent=1)
 
-    def bind(self, lid: str, fp: str, license_token: str) -> None:
-        self.data["devices"][lid] = {"fp": fp, "license": license_token}
+    def bind(self, lid: str, fp: str, tiers: list[str], expiry: str) -> None:
+        """
+        只存**派生信息**，不存许可证原文。
+
+        第五轮 R5-06：原来把 `license_token` 明文写进 `authd_state.json`，
+        而那个文件与客户端同 uid 可读 —— 等于把**别人的**有效许可证摊在桌上
+        （实测抠出来验签有效、11 档）。
+        """
+        self.data["devices"][lid] = {"fp": fp, "tiers": tiers, "expiry": expiry}
         self.data["revoked"] = [r for r in self.data["revoked"] if r != lid]
         self.save()
 
@@ -122,6 +153,7 @@ def make_lease(lid: str, fp: str, tiers: list[str]) -> str:
 
 
 def _lease_fields(token: str) -> dict | None:
+    """只解析，不验签 —— 内部用，**绝不能**拿它的结果当凭据"""
     try:
         payload_b64, _sig = token.split(".")
         fields = base64.urlsafe_b64decode(payload_b64 + "==").decode().split("|")
@@ -131,6 +163,28 @@ def _lease_fields(token: str) -> dict | None:
                 "tiers": [t for t in fields[4].split(",") if t]}
     except Exception:                                        # noqa: BLE001
         return None
+
+
+def verify_lease(token: str) -> dict | None:
+    """
+    **验签**之后才返回载荷。
+
+    第五轮 R5-05/R5-09：`/renew` 原来只做 base64 解码 + 按 `|` 切分就当成可信输入，
+    于是任何人只要知道 (lic_id, fp)（`/state` 或状态文件里都有）就能换到一张
+    **服务端签名的**合法租约 —— 不需要许可证、不需要私钥。
+    服务端把"客户端报上来的东西"直接变成了"服务端签发的凭据"，这是信任边界搞错了。
+    """
+    try:
+        payload_b64, sig_b64 = token.split(".")
+        payload = base64.urlsafe_b64decode(payload_b64 + "==")
+        sig = base64.urlsafe_b64decode(sig_b64 + "==")
+    except Exception:                                        # noqa: BLE001
+        return None
+    n, e, _d = load_private_key()
+    digest = int.from_bytes(hashlib.sha256(payload).digest()[:12], "big") % n
+    if pow(int.from_bytes(sig, "big"), e, n) != digest:
+        return None
+    return _lease_fields(token)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -154,8 +208,21 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def _admin_ok(self) -> bool:
+        """
+        /state 是**管理接口**，必须认证。
+
+        第五轮 R5-05/R5-09：它原来是裸的，攻击者不用猜 `lic_id`，
+        `GET /state` 直接把所有设备的 (lic_id, 指纹) 列出来，配合不验签的 /renew
+        就是一条"零凭据拿企业版租约"的链。默认关闭（没配 token 就一律拒绝）。
+        """
+        want = os.environ.get("PYTHON365_ADMIN_TOKEN")
+        return bool(want) and self.headers.get("X-Admin-Token") == want
+
     def do_GET(self):
         if self.path == "/state":
+            if not self._admin_ok():
+                return self._reply({"error": "管理接口需要 X-Admin-Token"}, 403)
             self._reply({"devices": {k: v["fp"] for k, v in STORE.data["devices"].items()},
                          "revoked": STORE.data["revoked"], "lease_ttl": LEASE_TTL})
         else:
@@ -165,20 +232,22 @@ class Handler(BaseHTTPRequestHandler):
         body = self._body()
         if self.path == "/activate":
             license_token, fp = body.get("license", ""), body.get("fp", "")
-            tiers = license_tiers(license_token)
-            if not tiers:
+            info = license_info(license_token)
+            if not info:
                 return self._reply({"error": "许可证无效或已过期"}, 403)
+            tiers, expiry = info
             lid = lic_id(license_token)
             bound = STORE.device(lid)
             if bound and bound["fp"] != fp:
                 return self._reply({"error": f"该许可证已绑定其他设备（{bound['fp'][:8]}…）"}, 409)
-            STORE.bind(lid, fp, license_token)
+            STORE.bind(lid, fp, tiers, expiry)          # 只存派生信息，不存许可证原文
             return self._reply({"lease": make_lease(lid, fp, tiers), "lic_id": lid})
 
         if self.path == "/renew":
-            fields = _lease_fields(body.get("lease", ""))
+            # ⚠️ 先**验签**：客户端交上来的东西在验签之前一文不值
+            fields = verify_lease(body.get("lease", ""))
             if not fields:
-                return self._reply({"error": "租约格式错误"}, 400)
+                return self._reply({"error": "租约签名无效"}, 403)
             lid, fp = fields["lid"], fields["fp"]
             if body.get("fp") != fp:
                 return self._reply({"error": "设备指纹不匹配"}, 409)
@@ -189,10 +258,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._reply({"error": "该租约没有对应的激活记录"}, 403)
             if bound["fp"] != fp:
                 return self._reply({"error": "设备绑定不匹配"}, 409)
-            tiers = license_tiers(bound["license"])
-            if not tiers:
+            if bound.get("expiry", "0") < time.strftime("%Y%m%d"):
                 return self._reply({"error": "许可证已过期"}, 403)
-            return self._reply({"lease": make_lease(lid, fp, tiers)})
+            # 只发"服务端自己记着的那份授权档"，不看客户端报了什么
+            return self._reply({"lease": make_lease(lid, fp, bound["tiers"])})
 
         if self.path == "/revoke":
             lid = body.get("lic_id") or lic_id(body.get("license", ""))

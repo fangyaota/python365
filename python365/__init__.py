@@ -143,13 +143,20 @@ def install() -> None:
         if fn is not None:
             fn(extra=extra)
 
-    def lease_fail():
-        """租约失效 → fail-closed（跟反篡改一个待遇，但话术不同）"""
-        _ui.box("⛔ 授权租约失效，服务已停机",
-                [f"原因：{keeper.why()}" if keeper else "原因：未知",
-                 "请检查设备绑定 / 许可证是否被吊销 / 网络是否可达",
-                 "续签成功即可恢复（本进程需重启）"])
-        _guard._EXIT(1)
+    # 租约失效 → fail-closed。**停机动作必须启动期绑定**：
+    # 第五轮 R5-04 发现这里原来写的是 `_guard._EXIT(1)`（运行期现查模块属性），
+    # 客户在程序开头加一行 `python365._guard._EXIT = noop` 就能把"停机"变成"什么也不做"，
+    # 带着满权限无限期运行 —— 第五轮"最多只能离线跑 TTL+宽限期"的承诺因此不成立。
+    def make_lease_fail(keeper_ref, terminate=_guard._EXIT, alarm=_ui.box):
+        def lease_fail():
+            alarm("⛔ 授权租约失效，服务已停机",
+                  [f"原因：{keeper_ref.why()}" if keeper_ref else "原因：未知",
+                   "请检查设备绑定 / 许可证是否被吊销 / 网络是否可达",
+                   "续签成功即可恢复（本进程需重启）"])
+            terminate(1)
+        return lease_fail
+
+    lease_fail = make_lease_fail(keeper)
 
     # 租约闸门：独立于计费钩子 —— 付费模式不注册计费钩子，
     # 但租约必须照样管（否则"已付费"进程反而不受吊销约束）
@@ -204,6 +211,12 @@ def install() -> None:
         _notes["tripwire"] = _guard.arm_tripwire(tripwire_hit)
         _guard.register_fork_guard(account.rearm_after_fork)
         _notes["kernel"] = _guard.arm_kernel_limit(account.cpu_quota())
+
+    # ⑧' CORE 语法闸门：只要没买语法包就得装，**付费版也不例外**
+    #     （第五轮 R5-11：它原来住在只给免费版注册的计费钩子里 → 付费客户白嫖 lambda）
+    if not _license.owns("CORE") and not free_tier:
+        _guard.handlers.append(when(None, "<start>").do(
+            _meter.make_syntax_hook(trust=trust)))
 
     # ⑨ 随机数降级（在所有装配完成之前）
     _walls.install_random_walls(trust)

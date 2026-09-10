@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import abc
 import importlib
 import inspect
 import random
@@ -67,10 +68,35 @@ def expand(path: str) -> list:
     if inspect.ismodule(obj):
         root = path.split(".")[0]
         for _name, member in inspect.getmembers(obj, inspect.isclass):
+            # 抽象基类（collections.abc / numbers / io …）**不铺墙**：
+            # 它们天生为"被继承"而生，方法被全进程共享 —— 给 Mapping 铺了墙，
+            # 用户一句 `os.environ.get("HOME")`（os._Environ 继承 Mapping）
+            # 就被收「基础版 · collections.abc」的税（第五轮 R5-07）。
+            # 真 ABC 不是"功能"，具体子类（Counter/UserDict/Path…）照旧铺。
+            if isinstance(member, abc.ABCMeta):
+                continue
             origin = getattr(member, "__module__", "") or ""
             if origin == obj.__name__ or origin.startswith(root + ".") or origin == root:
-                objects.append(member)
+                objects.extend(own_functions(member))
     return objects
+
+
+def own_functions(cls) -> list:
+    """
+    只取**这个类自己定义**的函数，不碰继承来的。
+
+    ⚠️ dowhen 的 `when(类, "<start>")` 会把继承的方法一起收 —— 而很多类继承了
+    抽象基类的方法（`Mapping.get` / `Sequence.__contains__` …），那些 code object 是
+    **全进程共享**的。于是用户一句 `os.environ.get("HOME")`
+    （`os.environ` 继承 `collections.abc.Mapping`）就被收「基础版 · collections.abc」的税。
+    第五轮 R5-07 就是这条假阳性；顺手也把被墙覆盖的 code object 数量降了下来。
+    """
+    out = []
+    for member in list(vars(cls).values()):
+        fn = member.__func__ if isinstance(member, (staticmethod, classmethod)) else member
+        if inspect.isfunction(fn):
+            out.append(fn)
+    return out
 
 
 # ══════════════════════════════════════════════════════════════════════

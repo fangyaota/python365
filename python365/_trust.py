@@ -37,7 +37,7 @@ def _collect_code_ids(code, out: set) -> None:
 
 def new_holder() -> dict:
     """给 build() 用的 holder（调用方自己拿着，不放进任何模块字典）"""
-    return {"ids": frozenset(), "dicts": frozenset()}
+    return {"ids": frozenset(), "dicts": {}}
 
 
 def collect_internal_objects() -> dict:
@@ -52,12 +52,16 @@ def collect_internal_objects() -> dict:
     （实测：启动期撞上自己的 `tempfile` 墙，横幅和统计静默丢失）。
     """
     ids: set[int] = set()
-    dict_ids: set[int] = set()
+    dict_by_file: dict[int, str] = {}
     for name, mod in list(sys.modules.items()):
         if not (name == "sitecustomize" or name.startswith("python365")
                 or name.startswith("dowhen")):
             continue
-        dict_ids.add(id(mod.__dict__))
+        # ⚠️ 只记 dict 的 id 是不够的 —— `f_globals` 是**可以借来的对象**：
+        #    types.FunctionType(compile(PROG, "<prog>", "exec"), SITE.__dict__)
+        #    就能把用户程序挂到内部模块的命名空间上，整段程序"自己人"化（第五轮 R5-01）。
+        #    所以 dict 身份必须与**该模块自己的文件名**配对：借来的 dict 会立刻露馅。
+        dict_by_file[id(mod.__dict__)] = getattr(mod, "__file__", "") or ""
         for obj in list(vars(mod).values()):
             code = getattr(obj, "__code__", None)
             if isinstance(code, types.CodeType):
@@ -67,7 +71,7 @@ def collect_internal_objects() -> dict:
                     sub = getattr(member, "__code__", None)
                     if isinstance(sub, types.CodeType):
                         _collect_code_ids(sub, ids)
-    return {"ids": frozenset(ids), "dicts": frozenset(dict_ids)}
+    return {"ids": frozenset(ids), "dicts": dict_by_file}
 
 
 def collect_internal_codes() -> frozenset:
@@ -112,11 +116,16 @@ def build(codes: dict) -> SimpleNamespace:
     def is_internal_frame(frame) -> bool:
         """
         这一帧是不是监控器自己？只认身份，不认任何字符串：
-          · 代码对象 id（函数/方法/闭包）
-          · 模块 __dict__ 的 id（模块顶层帧 —— 顶层 code 拿不到，只能这么认）
+
+          · 代码对象 id（函数/方法/闭包）—— 最硬的判据
+          · 模块 `__dict__` 的 id **且** `co_filename` 与该模块的 `__file__` 一致
+            （模块顶层帧的 code object 拿不到，只能靠 dict 认；但 dict 可以借来用，
+              所以必须再核一个"这帧的代码是不是真的来自那个文件"。—— 第五轮 R5-01）
         """
-        return (id(frame.f_code) in codes["ids"]
-                or id(frame.f_globals) in codes["dicts"])
+        if id(frame.f_code) in codes["ids"]:
+            return True
+        want_file = codes["dicts"].get(id(frame.f_globals))
+        return want_file is not None and frame.f_code.co_filename == want_file
 
     def trust_level(frame) -> int:
         """
@@ -140,7 +149,10 @@ def build(codes: dict) -> SimpleNamespace:
                 return 0
             return 0 if name == "__main__" else 2
         if not filename:
-            return 1
+            # 空 co_filename（`compile(src, "", "exec")`）：绝不能算"可信"。
+            # 第五轮 R5-02：判 1 等于白送计量与语法包；判 2 让它走"可疑帧"流程 ——
+            # 调用链里有真用户帧就照常收费，是标准库导入期 exec 出来的就放行。
+            return 2
         if filename.startswith("<"):          # <frozen importlib...> 等解释器内部
             mod = sys.modules.get(name)
             if mod is None or mod.__dict__ is not frame.f_globals:
