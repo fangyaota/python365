@@ -235,6 +235,9 @@ def install() -> None:
     #     所有模式都做：付费进程的墙同样是执法手段，不该让客户自己当法官（R6-02）
     _notes["disarm"] = _guard.disarm_attack_surface(checker)
 
+    # 装配结束 → 关掉抑制开关。从这一刻起走栈判定恢复完整语义。
+    trust.set_installing(False)
+
     _banner(free_tier)
 
 

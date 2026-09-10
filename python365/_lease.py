@@ -107,22 +107,29 @@ def _trusted_now() -> float:
     用**可信时间**判定到期（第七轮 R7-06）。
 
     裸 `time.time()` 只是一个可 patch 的模块属性 —— "到期永不触发"只需要一行。
-    这里复用许可证那套：网络时间 / 高水位 / 本地时钟**取最大**，
-    所以回拨或打桩都不改变结论。
+    这里复用许可证那套：网络时间 / 高水位 / 本地时钟**取最大**。
+
+    ⚠️ 第八轮 R8-02：这个函数**不在运行期从模块字典里找** ——
+    `LeaseKeeper.__init__` 用默认参数把它绑进实例（`self._clock`），
+    所以 `python365._lease._trusted_now = lambda: 0.0` 打不穿它。
+
+    而且**绝不退化成 `time.time()`**：可信时间拿不到就返回 `inf`（一律当已过期，
+    fail-closed）。退化成"可被 patch 的时间"等于把 fail-closed 的选择权让出去。
     """
     try:
         from ._license import best_known_now
         return best_known_now()[0]
     except Exception:                                        # noqa: BLE001
-        return time.time()
+        return float("inf")
 
 
 class LeaseKeeper:
     """持有当前租约、后台续签、对外提供两个只读判断（都很便宜）"""
 
     def __init__(self, server: str, license_token: str | None = None,
-                 interval: float | None = None):
+                 interval: float | None = None, clock=_trusted_now):
         self.server = server.rstrip("/")
+        self._clock = clock           # 启动期绑定：patch 模块级的 _trusted_now 影响不到它
         self.fp = fingerprint()
         self.license_token = license_token
         # 续签间隔：按宽限期推（用**服务端签进租约**的那个值，不是本地常量）
@@ -159,7 +166,7 @@ class LeaseKeeper:
         elif fields["fp"] != self.fp:
             self._state = {"ok": False, "why": f"租约绑定的是别的设备（{fields['fp'][:8]}…）",
                            "tiers": []}
-        elif fields["exp"] + fields["grace"] < _trusted_now():
+        elif fields["exp"] + fields["grace"] < self._clock():
             self._state = {"ok": False, "why": "租约已过期且超出宽限期", "tiers": []}
         else:
             self._state = {"ok": True, "why": "有效", "tiers": fields["tiers"]}

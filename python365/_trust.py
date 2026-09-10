@@ -37,7 +37,7 @@ def _collect_code_ids(code, out: set) -> None:
 
 def new_holder() -> dict:
     """给 build() 用的 holder（调用方自己拿着，不放进任何模块字典）"""
-    return {"ids": frozenset(), "modcode": set()}
+    return {"ids": frozenset(), "modcode": set(), "installing": True}
 
 
 def collect_internal_objects() -> dict:
@@ -168,7 +168,14 @@ def build(codes: dict) -> SimpleNamespace:
         if filename.startswith("<"):          # <frozen importlib...> 等解释器内部
             mod = sys.modules.get(name)
             if mod is None or mod.__dict__ is not frame.f_globals:
-                return 2
+                # ⚠️ 没有调用者的帧 = **入口帧**（新线程的根帧 / 顶层 exec），
+                # 必须判用户代码(0)，不能判"说不清"(2)。
+                # 第八轮 R8-01：`_thread.start_new_thread` 起的线程根帧 f_back 是 None，
+                # 攻击者只要把 co_filename 写成 `<frozen x>`、`__name__` 取一个不在
+                # sys.modules 里的名字，整条链上就**一帧 level-0 都没有** → 走栈走完
+                # → return False → 7112 道墙 + import 闸门 + 语法闸门全部放行。
+                # 判 2 的后果是"没人负责"，而入口帧的定义就是"责任起点是用户"。
+                return 0 if frame.f_back is None else 2
             return 0 if name == "__main__" else 1
         if looks_like_user_path(filename):
             return 0
@@ -209,7 +216,18 @@ def build(codes: dict) -> SimpleNamespace:
             return f
         return None
 
+    def set_installing(flag: bool) -> None:
+        """装配期抑制开关（持有在闭包里，外部改不到）"""
+        codes["installing"] = flag
+
     def wall_should_fire(allow_importlib: bool = False) -> bool:
+        # 装配期不收费：那时**没有任何用户代码在跑**，装墙过程里的大量标准库调用
+        # 都是监控器自己的动作。第七轮把"遇到内部帧就 return False"改成"继续往上找"
+        # 之后，每次调用都要走完整条栈 —— 免费版 7112 道墙，启动 CPU 从 1.6s 涨到 5.0s，
+        # 而内核 RLIMIT 是 6s：用户只剩 ~1 秒可用，卖的是 3 秒，最后收到的是 SIGKILL
+        # 而不是付费墙提示（第八轮 R8-04，是上一轮修法的自伤）。
+        if codes.get("installing"):
+            return False
         """
         统一判定：只有当"用户代码发起了这次调用"时才收费。
 
@@ -253,6 +271,7 @@ def build(codes: dict) -> SimpleNamespace:
             p = p.f_back
         return False
 
-    return SimpleNamespace(is_internal_frame=is_internal_frame, trust_level=trust_level,
+    return SimpleNamespace(set_installing=set_installing,
+                           is_internal_frame=is_internal_frame, trust_level=trust_level,
                            chain_has_user=chain_has_user, user_frame=user_frame,
                            wall_should_fire=wall_should_fire)
