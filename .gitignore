@@ -1,0 +1,13 @@
+# Python 365 —— 订阅制 Python 运行时
+# 仓库根就是这个项目目录，所以只需要忽略运行产物与凭据
+
+__pycache__/
+*.py[cod]
+
+# 私钥：绝不入库（默认在 ~/.python365-vendor/，这里是兜底）
+private_key.json
+*.key
+# 审计脚本签出的凭据样本 —— 同样是真凭据，不入库
+*.topup
+FORGED.*
+*.pyz
