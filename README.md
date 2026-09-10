@@ -80,7 +80,7 @@ python365.apply_topup(token)   # 续费：应用**厂商签名的**加油包令�
 
 ## 加固（红队审计后）
 
-经历 12 项攻击（11 项攻破）后做了针对性加固，现在 **11/11 全部封堵**（详见 `../exploits/REPORT.md`）：
+经历 12 项攻击（11 项攻破）后做了针对性加固，现在 **11/11 全部封堵**（详见 `exploits/REPORT.md`）：
 
 | 机制 | 挡住的攻击 |
 |---|---|
@@ -90,7 +90,7 @@ python365.apply_topup(token)   # 续费：应用**厂商签名的**加油包令�
 | **删掉对手的武器**：`del sys.monitoring`（不在 `sys.modules` 里，删除不可逆）+ 原位放**蜜罐** | 任何试图关闭监控的路径 |
 | **C 模块 Python 包装层**（并替换所有别名引用） | 用 `_csv` / `_json` / `_heapq` 白嫖 |
 | **内核 `RLIMIT_CPU`**（soft==hard）+ fork 时收紧到剩余额度 | 零事件纯 C 运算 / fork 逃逸 |
-| **RSA 签名许可证**（私钥在 `vendor/`）+ 到期日 | 伪造激活码 |
+| **RSA 签名许可证**（私钥只在厂商侧）+ 到期日 | 伪造激活码 |
 | **授权决策启动期固化**：墙 / CORE 语法闸门 / import 闸门全部在启动期定好，运行期不再读授权表 → 改 `_owned` 结构上失效；另有冻结副本同步比对，篡改即终止 | 运行期篡改授权表 |
 | **可信时间**：到期判定不用系统时钟 —— 网络时间（HTTPS `Date`）/ 高水位（本地记录见过的最大时间）/ 本地时钟**三者取最大**，所以回拨无效；高水位文件还有内存副本兜底（删掉会被看门狗抓到） | 拨回系统时钟复活过期许可证 |
 | **import 闸门**三层（`_find_and_load` 钩子 + `__import__` 包装层 + `meta_path` Finder） | C 模块的越狱通道 |
@@ -108,7 +108,7 @@ python365.apply_topup(token)   # 续费：应用**厂商签名的**加油包令�
 | **续费要凭厂商签名令牌**：客户端公开面移除 `set_quota`/`topup`（R3-6） | 用官方 API 自助充值 |
 | **私钥搬出客户端目录树**（默认 `~/.python365-vendor/`，R3-12） | 谁能拿到客户端谁就能签发许可证 |
 
-**防线清单**（第五轮上了租约架构之后重新分类 —— 详见 `../exploits/REPORT_LEASE.md`）：
+**防线清单**（第五轮上了租约架构之后重新分类 —— 详见 `exploits/REPORT_LEASE.md`）：
 
 | 残留 | 现状 | 靠什么 |
 |---|---|---|
@@ -142,7 +142,7 @@ PYTHONPATH=/workspace/python365 python3 你的程序.py
 | **吊销**：服务端 revoke | 续签立即失败 → 一个租约周期内停机 |
 | **独立闸门线程**：每 0.5s 查租约 | ⚠️ **不能挂在计费钩子上** —— 计费钩子只在免费版注册，"已付费"进程反而不受吊销约束（实测踩过：吊销后照跑 15 秒） |
 
-实测见 `../exploits/REPORT_LEASE.md`，一键复现：`python3 demos/lease_lab.py`。
+实测见 `exploits/REPORT_LEASE.md`，一键复现：`python3 demos/lease_lab.py`。
 
 **仍然只能抬高门槛的**：机器指纹是**客户端自报**的 —— 服务端只认那个字符串，
 所以"老实拷贝租约文件"挡得住，"改一行 `fingerprint()` 冒用已绑定的指纹"挡不住。
@@ -165,9 +165,9 @@ python3 vendor/issue.py ENTERPRISE 3650  # 自定义有效天数
 
 | 目录 | 内容 |
 |---|---|
-| `../demos/` | 演示脚本（`billing_test.py` 双层计费对决、`demo_app_365.py` 标准库全家桶、`prime_365.py` 质数程序、`net_time_lab.py` 可信时间实验、`dowhen_demo.py` / `hack_lab.py` 裸 dowhen 演示） |
-| `../exploits/` | 18 个攻击脚本 + 三套 `run_suite.sh` + 四份报告（`REPORT.md` / `REPORT_ROUND3` / `REPORT_ROUND4` / `REPORT_LEASE`） |
-| `../vendor/` | 密钥生成 / 发证 / 私钥（**不随客户端分发**） |
+| `demos/` | 演示脚本（`billing_test.py` 双层计费对决、`demo_app_365.py` 标准库全家桶、`prime_365.py` 质数程序、`net_time_lab.py` 可信时间实验、`dowhen_demo.py` / `hack_lab.py` 裸 dowhen 演示） |
+| `exploits/` | 18 个攻击脚本 + 三套 `run_suite.sh` + 四份报告（`REPORT.md` / `REPORT_ROUND3` / `REPORT_ROUND4` / `REPORT_LEASE`） |
+| `vendor/` | 密钥生成 / 发证 / 私钥（**不随客户端分发**） |
 
 ## 已知"特性"
 
