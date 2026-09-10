@@ -23,7 +23,7 @@ import time
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY365 = os.path.join(ROOT, "python365")
+PY365 = ROOT          # 搬迁后：项目根就是 PYTHONPATH 那一层
 PORT = 8791
 SERVER = f"http://127.0.0.1:{PORT}"
 TTL, GRACE = 6, 4                # 演示用短租约：窗口 = TTL + GRACE = 10 秒

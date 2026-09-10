@@ -142,7 +142,16 @@ PYTHONPATH=/workspace/python365 python3 你的程序.py
 | **吊销**：服务端 revoke | 续签立即失败 → 一个租约周期内停机 |
 | **独立闸门线程**：每 0.5s 查租约 | ⚠️ **不能挂在计费钩子上** —— 计费钩子只在免费版注册，"已付费"进程反而不受吊销约束（实测踩过：吊销后照跑 15 秒） |
 
-实测见 `exploits/REPORT_LEASE.md`，一键复现：`python3 demos/lease_lab.py`。
+实测见 `exploits/REPORT_LEASE.md`，一键复现：
+
+```bash
+python3 demos/lease_lab.py             # 六个场景：激活 / 换机停机 / 吊销停机 / 断网停机 / 冒用指纹 / 复测老洞
+python3 demos/uid_separation_lab.py    # "私钥到底谁能用"：藏起来 → 客户端照常、厂商签发全瘫
+```
+
+**"私钥不可达"是可验证的**：`uid_separation_lab.py` 把私钥移出文件系统后，
+客户端（带许可证、走租约）照常工作，而 `issue.py` 与 `/activate` 全部失败 ——
+说明**只有厂商侧需要私钥**，客户端连"有它"都不需要。
 
 **仍然只能抬高门槛的**：机器指纹是**客户端自报**的 —— 服务端只认那个字符串，
 所以"老实拷贝租约文件"挡得住，"改一行 `fingerprint()` 冒用已绑定的指纹"挡不住。
@@ -179,3 +188,12 @@ python3 vendor/issue.py ENTERPRISE 3650  # 自定义有效天数
 - 拦截构造函数会留下半初始化对象，析构时可能抛 `AttributeError`（真实系统同理）。
 - 试用期 30 天，时间戳在 `/tmp/.python365_install`，删掉即可重置。
 - `inspect` / `traceback` / `importlib` / `warnings` 豁免 —— 锁了监控机制自己先崩。
+
+### 开发环境（这个沙箱）的两条坑
+
+1. **跨目录移动目录不能用 `mv`**：本沙箱的文件系统把 `mv` 实现成"惰性拷贝 + 符号链接" ——
+   移动后的 `.git` 里全是**指向旧路径的悬空软链**，清理时会连数据一起删掉。
+   本项目就因为 `mv .git` 丢过一次 git 历史。请用 `cp -r` + `rm -rf`。
+2. **文件权限语义测不出来**：沙箱是 proot（fake-root），`setpriv` 能改 uid（`id` 显示 nobody），
+   但 nobody 照样读得到 `0600 root` 的文件。所以"用 uid 隔离证明私钥不可达"这条路在此环境中无效 ——
+   `demos/uid_separation_lab.py` 改用「把私钥移出文件系统」这种不依赖权限语义的实验。
