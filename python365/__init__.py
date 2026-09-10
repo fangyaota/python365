@@ -200,15 +200,21 @@ def install() -> None:
             when(_bootstrap._find_and_load, "<start>")
             .do(_guard.make_import_wall_hook(_walls.make_lazy_installer(trust))))
 
-    # ⑧ 计量与加固（免费版专属）
+    # ⑧'' 反篡改与拆武器：**所有模式都要装**。
+    #     第六轮 R6-02：早先这一整套只在 `if free_tier:` 里 —— 于是付费进程里
+    #     `sys.monitoring` 是真身、没有看门狗也没有蜜罐，而"未购买档位"的墙照装
+    #     （DATA+BASIC 客户一启动 5915 道）→ 一行 `dowhen.clear_all()` 全部拆掉。
+    #     探针 + 注册表指纹 + 蜜罐都是零 CPU 开销的轻量件，没理由只给免费版。
+    _guard.start_watchdog(checker, probe)
+    _notes["tripwire"] = _guard.arm_tripwire(tripwire_hit)
+
+    # ⑧ 计量（免费版专属 —— 付费版不限量，不需要按调用计费）
     if free_tier:
         # 实测 CPU 分解：装墙 0.35s + 启用全局事件 0.26s（CPython 要为进程里所有
         # code object 做插桩，跟回调写得多快无关）。这笔账记在用户头上。
         _guard.handlers.append(when(None, "<start>").do(account.hook_call))
         _guard.handlers.append(when(None, "<return>").do(account.hook_return))
         account.start_meter()
-        _guard.start_watchdog(checker, probe)
-        _notes["tripwire"] = _guard.arm_tripwire(tripwire_hit)
         _guard.register_fork_guard(account.rearm_after_fork)
         _notes["kernel"] = _guard.arm_kernel_limit(account.cpu_quota())
 
@@ -226,10 +232,8 @@ def install() -> None:
                       else "未启用（PYTHON365_IMPORT_GATE=1 打开）")
 
     # ⑪ 拆掉对手的武器 —— 必须最后（dowhen 每装一道墙都要读 monitoring API）
-    if free_tier:
-        _notes["disarm"] = _guard.disarm_attack_surface(checker)
-    else:
-        _notes["disarm"] = "企业版：API 保持原样（不做反篡改）"
+    #     所有模式都做：付费进程的墙同样是执法手段，不该让客户自己当法官（R6-02）
+    _notes["disarm"] = _guard.disarm_attack_surface(checker)
 
     _banner(free_tier)
 

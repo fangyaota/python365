@@ -68,12 +68,16 @@ def expand(path: str) -> list:
     if inspect.ismodule(obj):
         root = path.split(".")[0]
         for _name, member in inspect.getmembers(obj, inspect.isclass):
-            # 抽象基类（collections.abc / numbers / io …）**不铺墙**：
-            # 它们天生为"被继承"而生，方法被全进程共享 —— 给 Mapping 铺了墙，
-            # 用户一句 `os.environ.get("HOME")`（os._Environ 继承 Mapping）
-            # 就被收「基础版 · collections.abc」的税（第五轮 R5-07）。
-            # 真 ABC 不是"功能"，具体子类（Counter/UserDict/Path…）照旧铺。
-            if isinstance(member, abc.ABCMeta):
+            # **真正的抽象基类**不铺墙：它们天生为"被继承"而生，方法被全进程共享 ——
+            # 给 Mapping 铺了墙，用户一句 `os.environ.get("HOME")`
+            # （os._Environ 继承 Mapping）就被收「基础版」的税（第五轮 R5-07）。
+            #
+            # ⚠️ 别用 `isinstance(member, abc.ABCMeta)` 判：**元类是会被继承的**，
+            #    任何"派生自 ABC 的具体类"元类也是 ABCMeta —— 于是 UserDict /
+            #    Fraction / ConfigParser / SpooledTemporaryFile 这些**真正收钱的类**
+            #    会被整片摘掉墙（第六轮 R6-04：30 个类 / 386 个自有方法裸奔）。
+            #    正确的判据是"这个类自己还有没有没实现的抽象方法"。
+            if getattr(member, "__abstractmethods__", None):
                 continue
             origin = getattr(member, "__module__", "") or ""
             if origin == obj.__name__ or origin.startswith(root + ".") or origin == root:

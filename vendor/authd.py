@@ -22,6 +22,7 @@ import base64
 import hashlib
 import json
 import os
+import secrets
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -119,15 +120,37 @@ class Store:
         with open(self.path, "w") as fh:
             json.dump(self.data, fh, indent=1)
 
-    def bind(self, lid: str, fp: str, tiers: list[str], expiry: str) -> None:
+    def bind(self, lid: str, fp: str, tiers: list[str], expiry: str) -> str:
         """
-        只存**派生信息**，不存许可证原文。
+        只存**派生信息**，不存许可证原文（第五轮 R5-06），并且**绝不碰吊销列表**。
 
-        第五轮 R5-06：原来把 `license_token` 明文写进 `authd_state.json`，
-        而那个文件与客户端同 uid 可读 —— 等于把**别人的**有效许可证摊在桌上
-        （实测抠出来验签有效、11 档）。
+        第六轮 R6-03：原来这里是"重新激活顺手清掉旧吊销"的写法 ——
+        而 `/activate` 对任何持有效许可证的人都放行，客户端每次重启又会自动调它
+        （`install()` 里 `if not keeper.valid(): keeper.activate()`）：
+        **被吊销的客户只要重启一次程序就复活。**
+
+        要解除吊销必须走显式的运维动作（`/unrevoke` + 管理令牌），
+        不能是"重新激活"的副作用。
+
+        返回一个**一次性刷新令牌**（R6-05）：租约在明文通道上走，
+        抓到一张不该等于"无限续期"。
         """
-        self.data["devices"][lid] = {"fp": fp, "tiers": tiers, "expiry": expiry}
+        refresh = secrets.token_urlsafe(16)
+        self.data["devices"][lid] = {"fp": fp, "tiers": tiers, "expiry": expiry,
+                                     "refresh": refresh}
+        self.save()
+        return refresh
+
+    def rotate_refresh(self, lid: str) -> str | None:
+        """换一张新的刷新令牌（旧的立刻作废）"""
+        dev = self.data["devices"].get(lid)
+        if not dev:
+            return None
+        dev["refresh"] = secrets.token_urlsafe(16)
+        self.save()
+        return dev["refresh"]
+
+    def unrevoke(self, lid: str) -> None:
         self.data["revoked"] = [r for r in self.data["revoked"] if r != lid]
         self.save()
 
@@ -240,8 +263,9 @@ class Handler(BaseHTTPRequestHandler):
             bound = STORE.device(lid)
             if bound and bound["fp"] != fp:
                 return self._reply({"error": f"该许可证已绑定其他设备（{bound['fp'][:8]}…）"}, 409)
-            STORE.bind(lid, fp, tiers, expiry)          # 只存派生信息，不存许可证原文
-            return self._reply({"lease": make_lease(lid, fp, tiers), "lic_id": lid})
+            refresh = STORE.bind(lid, fp, tiers, expiry)   # 只存派生信息，不碰吊销列表
+            return self._reply({"lease": make_lease(lid, fp, tiers), "lic_id": lid,
+                                "refresh": refresh})
 
         if self.path == "/renew":
             # ⚠️ 先**验签**：客户端交上来的东西在验签之前一文不值
@@ -260,13 +284,25 @@ class Handler(BaseHTTPRequestHandler):
                 return self._reply({"error": "设备绑定不匹配"}, 409)
             if bound.get("expiry", "0") < time.strftime("%Y%m%d"):
                 return self._reply({"error": "许可证已过期"}, 403)
+            # 一次性刷新令牌：抓到一张租约 ≠ 无限续期（R6-05）
+            if not bound.get("refresh") or body.get("refresh") != bound["refresh"]:
+                return self._reply({"error": "刷新令牌无效（可能已用过）"}, 403)
             # 只发"服务端自己记着的那份授权档"，不看客户端报了什么
-            return self._reply({"lease": make_lease(lid, fp, bound["tiers"])})
+            return self._reply({"lease": make_lease(lid, fp, bound["tiers"]),
+                                "refresh": STORE.rotate_refresh(lid)})
 
         if self.path == "/revoke":
             lid = body.get("lic_id") or lic_id(body.get("license", ""))
             STORE.revoke(lid)
             return self._reply({"revoked": lid, "list": STORE.data["revoked"]})
+
+        if self.path == "/unrevoke":
+            # 解除吊销是**运维动作**，必须有管理凭据 —— 不能是重新激活的副作用
+            if not self._admin_ok():
+                return self._reply({"error": "管理接口需要 X-Admin-Token"}, 403)
+            lid = body.get("lic_id", "")
+            STORE.unrevoke(lid)
+            return self._reply({"unrevoked": lid, "list": STORE.data["revoked"]})
 
         self._reply({"error": "not found"}, 404)
 

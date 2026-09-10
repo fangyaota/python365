@@ -37,7 +37,7 @@ def _collect_code_ids(code, out: set) -> None:
 
 def new_holder() -> dict:
     """给 build() 用的 holder（调用方自己拿着，不放进任何模块字典）"""
-    return {"ids": frozenset(), "dicts": {}}
+    return {"ids": frozenset(), "modcode": set()}
 
 
 def collect_internal_objects() -> dict:
@@ -52,16 +52,29 @@ def collect_internal_objects() -> dict:
     （实测：启动期撞上自己的 `tempfile` 墙，横幅和统计静默丢失）。
     """
     ids: set[int] = set()
-    dict_by_file: dict[int, str] = {}
+    modcodes: set = set()          # 模块级 code object —— **按值**比较
     for name, mod in list(sys.modules.items()):
         if not (name == "sitecustomize" or name.startswith("python365")
                 or name.startswith("dowhen")):
             continue
-        # ⚠️ 只记 dict 的 id 是不够的 —— `f_globals` 是**可以借来的对象**：
-        #    types.FunctionType(compile(PROG, "<prog>", "exec"), SITE.__dict__)
-        #    就能把用户程序挂到内部模块的命名空间上，整段程序"自己人"化（第五轮 R5-01）。
-        #    所以 dict 身份必须与**该模块自己的文件名**配对：借来的 dict 会立刻露馅。
-        dict_by_file[id(mod.__dict__)] = getattr(mod, "__file__", "") or ""
+        # 模块级帧的判据：拿"这个模块的模块级 code object **本身**"来比。
+        #
+        # ⚠️ 走过的弯路（五、六两轮各一次）：
+        #   · 比 `id(mod.__dict__)` → 用户可以借那个 dict 当 globals（R5-01）
+        #   · 再补一个 `co_filename == mod.__file__` → 他连 co_filename 一起凑（R6-01，
+        #     而 co_filename 正是第一轮被打穿的那个"自报字段"）
+        # 两个可读值凑一起还是可读值。代码对象没法"借"：要让它命中，
+        # 只能真去执行我们那个模块的顶层 —— 那只会把付费墙装得更牢。
+        #
+        # 取值方式：源码加载器能按源文件重新编出**值相等**的 code object（CodeType 按值比较）；
+        # 我们自己的模块另外在导入那一刻把活帧抓进 ids（见 capture_module_frame）。
+        try:
+            loader = getattr(getattr(mod, "__spec__", None), "loader", None)
+            code = loader.get_code(name) if loader is not None else None
+            if isinstance(code, types.CodeType):
+                modcodes.add(code)
+        except Exception:                                    # noqa: BLE001
+            pass
         for obj in list(vars(mod).values()):
             code = getattr(obj, "__code__", None)
             if isinstance(code, types.CodeType):
@@ -71,7 +84,7 @@ def collect_internal_objects() -> dict:
                     sub = getattr(member, "__code__", None)
                     if isinstance(sub, types.CodeType):
                         _collect_code_ids(sub, ids)
-    return {"ids": frozenset(ids), "dicts": dict_by_file}
+    return {"ids": frozenset(ids), "modcode": modcodes}
 
 
 def collect_internal_codes() -> frozenset:
@@ -115,17 +128,16 @@ def build(codes: dict) -> SimpleNamespace:
     """
     def is_internal_frame(frame) -> bool:
         """
-        这一帧是不是监控器自己？只认身份，不认任何字符串：
+        这一帧是不是监控器自己？**只认代码对象**，不认任何可以借来的属性
+        （`co_filename` / `__name__` / `f_globals` 都试过了，都被借过）：
 
-          · 代码对象 id（函数/方法/闭包）—— 最硬的判据
-          · 模块 `__dict__` 的 id **且** `co_filename` 与该模块的 `__file__` 一致
-            （模块顶层帧的 code object 拿不到，只能靠 dict 认；但 dict 可以借来用，
-              所以必须再核一个"这帧的代码是不是真的来自那个文件"。—— 第五轮 R5-01）
+          · 代码对象 id 属于自己人（函数/方法/闭包）—— 最硬
+          · 或代码对象**按值**等于某个自己模块的模块级 code object
+            （CodeType 按值比较；要凑出它只能真执行我们的模块顶层，那只会把墙装得更牢）
         """
         if id(frame.f_code) in codes["ids"]:
             return True
-        want_file = codes["dicts"].get(id(frame.f_globals))
-        return want_file is not None and frame.f_code.co_filename == want_file
+        return frame.f_code in codes["modcode"]
 
     def trust_level(frame) -> int:
         """

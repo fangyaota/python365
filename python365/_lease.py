@@ -107,6 +107,7 @@ class LeaseKeeper:
         self.interval = interval or max(1.0, (GRACE + 8) / 4)
         self._lock = threading.Lock()
         self._lease: str | None = None
+        self._refresh: str | None = None      # 一次性刷新令牌（R6-05）：抓到租约 ≠ 能续期
         self._state = {"ok": False, "why": "未激活", "tiers": []}
         self._load()
 
@@ -114,7 +115,9 @@ class LeaseKeeper:
     def _load(self) -> None:
         try:
             with open(LEASE_FILE) as fh:
-                self._lease = json.load(fh).get("lease")
+                saved = json.load(fh)
+            self._lease = saved.get("lease")
+            self._refresh = saved.get("refresh")
         except (OSError, ValueError):
             self._lease = None
         self._refresh_state()
@@ -122,7 +125,8 @@ class LeaseKeeper:
     def _save(self) -> None:
         try:
             with open(LEASE_FILE, "w") as fh:
-                json.dump({"lease": self._lease, "fp": self.fp, "server": self.server}, fh)
+                json.dump({"lease": self._lease, "fp": self.fp, "server": self.server,
+                           "refresh": self._refresh}, fh)
         except OSError:
             pass
 
@@ -171,6 +175,7 @@ class LeaseKeeper:
             return False
         with self._lock:
             self._lease = got["lease"]
+            self._refresh = got.get("refresh")
             self._save()
             self._refresh_state()
         return self._state["ok"]
@@ -181,7 +186,8 @@ class LeaseKeeper:
         if not lease:
             return False
         try:
-            got = _post(f"{self.server}/renew", {"lease": lease, "fp": self.fp})
+            got = _post(f"{self.server}/renew",
+                        {"lease": lease, "fp": self.fp, "refresh": self._refresh})
         except _http_error() as exc:                         # 服务端明确拒绝（吊销/换机）
             with self._lock:
                 self._state = {"ok": False, "why": f"续签被拒：{_error_of(exc)}", "tiers": []}
@@ -197,6 +203,7 @@ class LeaseKeeper:
             return False
         with self._lock:
             self._lease = got["lease"]
+            self._refresh = got.get("refresh", self._refresh)   # 令牌轮换：旧的作废
             self._save()
             self._refresh_state()
         return True
