@@ -186,6 +186,7 @@ def install() -> None:
                                   owned_intact=_license.owned_intact,
                                   handlers_list=_guard.handlers,
                                   expected_registry=_guard.registry_size(),
+                                  expected_snapshot=_guard.registry_snapshot(),
                                   high_water=[0.0],
                                   high_water_of=_license._high_water,
                                   net_time_of=lambda: _license._net_time)

@@ -19,6 +19,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 import threading
@@ -36,6 +37,40 @@ handlers: list = []                        # 所有注册过的 EventHandler（�
 _EXIT = os._exit                           # 启动期缓存：`os._exit = noop` 不该能吃掉终止动作
 
 
+def registry_snapshot() -> str:
+    """
+    监控注册表的**结构指纹**：每个 code object 下每个事件类型挂了哪些 handler 对象。
+
+    ⚠️ R3-7 的指纹只记 `len(Instrumenter().handlers)`，也就是"有多少个 code object 被挂钩子"。
+    但 `handlers[code]` 里面的列表是可以**原地清空**的 —— 键还在、长度不变、
+    7117 道墙静默消失（第 21 号攻击）。只数个数等于没看。
+
+    这里细到"每个 code 的每个 kind 的**对象 id**"：改列表内容会让 id 集合变化，
+    而 id 偷换不了（活对象的 id 唯一）。
+    """
+    try:
+        from dowhen.instrumenter import Instrumenter
+        table = Instrumenter().handlers
+    except Exception:                                        # noqa: BLE001
+        return ""
+    parts = []
+    for code, kinds in table.items():
+        cid = id(code)
+        if not isinstance(kinds, dict):
+            parts.append(f"{cid}:{type(kinds).__name__}")
+            continue
+        for kind, val in kinds.items():
+            if isinstance(val, list):
+                parts.append(f"{cid}.{kind}:" + ",".join(str(id(x)) for x in val))
+            elif isinstance(val, dict):                      # line 事件：{行号: [handler]}
+                inner = ",".join(f"{k}={len(v) if hasattr(v, '__len__') else 1}"
+                                 for k, v in val.items())
+                parts.append(f"{cid}.{kind}:{inner}")
+            else:
+                parts.append(f"{cid}.{kind}:{type(val).__name__}")
+    return hashlib.sha1("|".join(sorted(parts)).encode()).hexdigest()
+
+
 def _dowhen_registry_size() -> int:
     """dowhen 内部注册表里还有多少条记录 —— clear_all() 会把它清空"""
     try:
@@ -50,7 +85,8 @@ def _dowhen_registry_size() -> int:
 # ══════════════════════════════════════════════════════════════════════
 def make_checker(*, shadow_ok, owned_intact, handlers_list, expected_registry, high_water,
                  registry_size=_dowhen_registry_size, high_water_of=None, net_time_of=None,
-                 alarm=_ui.box, terminate=_EXIT):
+                 alarm=_ui.box, terminate=_EXIT,
+                 expected_snapshot=None, snapshot_of=registry_snapshot):
     """
     造一个"完整性判定器"。**所有依赖都是参数** —— 运行期改 `_guard.xxx` 改不到它。
 
@@ -76,6 +112,10 @@ def make_checker(*, shadow_ok, owned_intact, handlers_list, expected_registry, h
             current = registry_size()
             if current != -1 and current < expected_registry:
                 problems.append(f"监控注册表被清空（{expected_registry} → {current}）")
+            if expected_snapshot is not None:
+                # 只比个数是不够的：原地清空 handlers[code]["start"] 时个数一点没变
+                if snapshot_of() != expected_snapshot:
+                    problems.append("监控注册表结构被改动（有墙被静默摘除）")
             if high_water_of is not None:
                 seen = high_water_of()
                 if seen < high_water[0] - 1:
