@@ -85,8 +85,18 @@ def install() -> None:
         print(f"{_ui.RED}⚠️  激活码无效：{bad}（已忽略）{_ui.R}")
     free_tier = not owned
 
-    # ① 身份判定：holder 装代码对象 id，build 出来的判定器全部闭包持有它
-    #    （先收一遍保护自己，装完墙后再更新一次 —— dowhen.handler 是懒加载的）
+    # ① 身份判定：holder 装代码对象 id，build 出来的判定器全部闭包持有它。
+    #
+    # ⚠️ 收集之前必须把**我们自己的所有子模块**都导入一遍。
+    # 它们是懒加载的（比如 `_lease` 只在租约模式才 import），而集合是启动期快照 ——
+    # 之后才被导入的子模块，其栈帧不会被认作"自己人"，于是它在模块级碰任何标准库
+    # 都会被当成用户代码收税（实测：`os.environ.get` 撞上「基础版 · collections.abc」）。
+    # 这是第三轮 `dowhen.handler` 那个坑的同一族问题：**清单必须覆盖所有自己人。**
+    import importlib as _importlib
+    for _sub in ("_tiers", "_trust", "_license", "_ui", "_meter", "_walls",
+                 "_guard", "_gate", "_lease"):
+        _importlib.import_module(f"{__name__}.{_sub}")
+
     id_holder = _trust.new_holder()
     id_holder.update(_trust.collect_internal_objects())
     trust = _trust.build(id_holder)

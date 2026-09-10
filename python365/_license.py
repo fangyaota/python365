@@ -1,8 +1,9 @@
 """
 授权 —— RSA 签名许可证。
 
-客户端只内嵌**公钥**；伪造签名需要私钥，而私钥留在 vendor/private_key.json，
-不随客户端分发。漏洞版本是 sum(ord(c)) % 10000 校验和 —— 读一眼源码就能算出企业版码。
+客户端只内嵌**公钥**；伪造签名需要私钥，而私钥默认在 ~/.python365-vendor/（客户端目录树之外），
+真实部署应放独立主机 / 独立 uid / HSM，或干脆只在服务端签名（见 _lease.py 与 vendor/authd.py）。
+漏洞版本是 sum(ord(c)) % 10000 校验和 —— 读一眼源码就能算出企业版码。
 """
 from __future__ import annotations
 
