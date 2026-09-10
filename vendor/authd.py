@@ -321,7 +321,8 @@ class Handler(BaseHTTPRequestHandler):
             # 解除吊销是**运维动作**，必须有管理凭据 —— 不能是重新激活的副作用
             if not self._admin_ok():
                 return self._reply({"error": "管理接口需要 X-Admin-Token"}, 403)
-            lid = body.get("lic_id", "")
+            # 和 /revoke 保持一致：两种写法都认（只给 lic_id 时用它，给许可证时算出来）
+            lid = body.get("lic_id") or lic_id(body.get("license", ""))
             STORE.unrevoke(lid)
             return self._reply({"unrevoked": lid, "list": STORE.data["revoked"]})
 
@@ -332,8 +333,21 @@ def main() -> None:
     global STORE
     STORE = Store(STATE)
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8787
-    print(f"厂商授权服务端已启动 :{port}  租约 {LEASE_TTL}s  状态文件 {STATE}", flush=True)
-    ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
+    httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    cert, key = os.environ.get("PYTHON365_TLS_CERT"), os.environ.get("PYTHON365_TLS_KEY")
+    if cert and key:
+        # TLS：租约与刷新令牌是 bearer 凭据，明文通道上"抓到一次 = 劫持"
+        # （第七/八轮 R7-04 / R8-03）。加密之后同出口的观察者只剩"盲目转发"。
+        import ssl
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(cert, key)
+        httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
+        scheme = "TLS"
+    else:
+        scheme = "明文 —— 仅演示用，生产必须 TLS"
+    print(f"厂商授权服务端已启动 :{port}（{scheme}）  租约 {LEASE_TTL}s  状态文件 {STATE}",
+          flush=True)
+    httpd.serve_forever()
 
 
 if __name__ == "__main__":

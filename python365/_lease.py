@@ -71,12 +71,35 @@ def _error_of(exc) -> str:
         return str(exc)
 
 
+# 厂商 CA 的**固定**位置（cert pinning）。路径写死在包里，不读环境变量 ——
+# R7-06 的教训：安全判定要用的东西，不能由被判定方声明。
+CA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "certs", "vendor-ca.crt")
+
+
+def _ssl_context():
+    """
+    https 时用固定 CA 校验服务端身份（不信任系统信任库，也不允许"装了代理"）。
+
+    这条是 R7-04 / R8-03 的**正确修法**：运输层加密之后，
+    同出口的观察者能做的只剩"盲目转发"，拿不到 bearer 令牌也就无法劫持；
+    而 pinning 让"自己签一张证书装成服务端"这条也不成立。
+    """
+    import ssl
+    if not os.path.exists(CA_FILE):
+        return None
+    ctx = ssl.create_default_context(cafile=CA_FILE)
+    ctx.check_hostname = True
+    ctx.verify_mode = ssl.CERT_REQUIRED
+    return ctx
+
+
 def _post(url: str, payload: dict, timeout: float = 4.0) -> dict:
     import urllib.request                       # 本模块被监控豁免，可以白嫖自己的"网络版"
     req = urllib.request.Request(
         url, data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    ctx = _ssl_context() if url.startswith("https") else None
+    with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
         return json.loads(resp.read().decode())
 
 
@@ -197,7 +220,13 @@ class LeaseKeeper:
             self._state = {"ok": False, "why": f"激活被拒：{_error_of(exc)}", "tiers": []}
             return False
         except Exception as exc:                             # noqa: BLE001
-            self._state = {"ok": False, "why": f"激活失败：{type(exc).__name__}", "tiers": []}
+            # urllib 把 TLS 校验失败包成 URLError(reason=SSLCertVerificationError)，
+            # 只报一个 URLError 会让人分不清"网络不通"和"证书没通过" ——
+            # 而后者才是 pinning 在起作用（演示中间人时要看得见）。
+            reason = getattr(exc, "reason", None)
+            detail = f" · {reason}" if reason else ""
+            self._state = {"ok": False, "why": f"激活失败：{type(exc).__name__}{detail}"[:120],
+                           "tiers": []}
             return False
         if "lease" not in got:
             self._state = {"ok": False, "why": f"激活被拒：{got.get('error', '?')}", "tiers": []}
