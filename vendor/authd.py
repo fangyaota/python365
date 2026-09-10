@@ -36,6 +36,7 @@ sys.path.insert(0, HERE)
 from issue import load_private_key  # noqa: E402  同一份密钥加载逻辑
 
 LEASE_TTL = int(os.environ.get("PYTHON365_LEASE_TTL", "8"))     # 演示用：8 秒租约
+LEASE_GRACE = float(os.environ.get("PYTHON365_LEASE_GRACE", "4"))  # 宽限期：签进租约载荷
 
 
 def _b64(raw: bytes) -> str:
@@ -120,7 +121,7 @@ class Store:
         with open(self.path, "w") as fh:
             json.dump(self.data, fh, indent=1)
 
-    def bind(self, lid: str, fp: str, tiers: list[str], expiry: str) -> str:
+    def bind(self, lid: str, fp: str, tiers: list[str], expiry: str, ip: str = "") -> str:
         """
         只存**派生信息**，不存许可证原文（第五轮 R5-06），并且**绝不碰吊销列表**。
 
@@ -137,7 +138,7 @@ class Store:
         """
         refresh = secrets.token_urlsafe(16)
         self.data["devices"][lid] = {"fp": fp, "tiers": tiers, "expiry": expiry,
-                                     "refresh": refresh}
+                                     "refresh": refresh, "ip": ip}
         self.save()
         return refresh
 
@@ -170,8 +171,15 @@ STORE: Store
 
 
 def make_lease(lid: str, fp: str, tiers: list[str]) -> str:
+    """
+    把**宽限期也签进载荷**（第七轮 R7-06）。
+
+    原来宽限期来自客户端环境变量 `PYTHON365_LEASE_GRACE` —— 那是"到期就停机"这条
+    fail-closed 规则的一个输入，摆在攻击者手里：`GRACE=999999999999` 一个环境变量，
+    短周期租约就形同虚设。凡是要用来做安全判定的参数，都不能由被判定方声明。
+    """
     exp = int(time.time()) + LEASE_TTL
-    payload = f"LEASE|{lid}|{fp}|{exp}|{','.join(tiers)}".encode()
+    payload = f"LEASE|{lid}|{fp}|{exp}|{','.join(tiers)}|{LEASE_GRACE}".encode()
     return f"{_b64(payload)}.{_sign(payload)}"
 
 
@@ -183,7 +191,8 @@ def _lease_fields(token: str) -> dict | None:
         if fields[0] != "LEASE":
             return None
         return {"lid": fields[1], "fp": fields[2], "exp": int(fields[3]),
-                "tiers": [t for t in fields[4].split(",") if t]}
+                "tiers": [t for t in fields[4].split(",") if t],
+                "grace": float(fields[5]) if len(fields) > 5 else LEASE_GRACE}
     except Exception:                                        # noqa: BLE001
         return None
 
@@ -260,10 +269,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self._reply({"error": "许可证无效或已过期"}, 403)
             tiers, expiry = info
             lid = lic_id(license_token)
+            # 第七轮 R7-05：`bind()` 不再清吊销之后，这里必须自己看吊销名单 ——
+            # 否则被吊销的客户每次重启都能靠 /activate 拿回一个完整租约周期。
+            if STORE.is_revoked(lid):
+                return self._reply({"error": "该许可证已被吊销"}, 403)
             bound = STORE.device(lid)
             if bound and bound["fp"] != fp:
                 return self._reply({"error": f"该许可证已绑定其他设备（{bound['fp'][:8]}…）"}, 409)
-            refresh = STORE.bind(lid, fp, tiers, expiry)   # 只存派生信息，不碰吊销列表
+            # 记下**连接**的来源地址（客户端自己报什么都不算）——
+            # 第七轮 R7-04：租约与刷新令牌在明文 HTTP 上走，链路观察者抓到一次
+            # 就能靠"谁先用谁赢"劫持会话。绑定来源地址是一条弱启发式，
+            # 真正的修法是 TLS / token binding（见 README 的"仍然修不掉的"）。
+            refresh = STORE.bind(lid, fp, tiers, expiry,
+                                 self.client_address[0])   # 只存派生信息，不碰吊销列表
             return self._reply({"lease": make_lease(lid, fp, tiers), "lic_id": lid,
                                 "refresh": refresh})
 
@@ -282,6 +300,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._reply({"error": "该租约没有对应的激活记录"}, 403)
             if bound["fp"] != fp:
                 return self._reply({"error": "设备绑定不匹配"}, 409)
+            if bound.get("ip") and bound["ip"] != self.client_address[0]:
+                # 弱启发式：来源地址变了就拒（第七轮 R7-04 的缓解；真修法是 TLS）
+                return self._reply({"error": "续签来源与激活来源不一致"}, 409)
             if bound.get("expiry", "0") < time.strftime("%Y%m%d"):
                 return self._reply({"error": "许可证已过期"}, 403)
             # 一次性刷新令牌：抓到一张租约 ≠ 无限续期（R6-05）

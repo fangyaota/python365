@@ -231,7 +231,17 @@ def build(codes: dict) -> SimpleNamespace:
         while p is not None:
             mod = p.f_globals.get("__name__", "")
             if is_internal_frame(p):
-                return False
+                # ⚠️ 这里必须"跳过继续往上找"，**不能直接 return False**。
+                # 第七轮 R7-01/02/03：「链上出现内部帧就放行」是一条可以被当挡箭牌的规则 ——
+                # 攻击者只要让自己的帧不是 level 0（`<string>` + `__name__ != __main__`），
+                # 再把我们的模块顶层代码拿去 exec（模块体里的 set()/frozenset() 换成他的钩子），
+                # "他的帧 → 内部帧"这样一叠，走栈撞到内部帧就放行：7112 道墙一道不响，
+                # 而判据本身（代码对象）他根本没碰。判据换了六次，这条规则没换过。
+                #
+                # 跳过之后：真正的"监控器自己调标准库"整条链没有 level-0 帧，循环走完
+                # 自然 return False；挡箭牌那条链上层是用户帧 → 收税。
+                p = p.f_back
+                continue
             # 终结/清理路径豁免 —— 只有**非用户代码**才配享受（帧名是用户可控字段）
             if p.f_code.co_name in ("__del__", "__exit__", "__aexit__") and trust_level(p) != 0:
                 return False

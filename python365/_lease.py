@@ -27,7 +27,12 @@ import threading
 import time
 
 LEASE_FILE = os.environ.get("PYTHON365_LEASE_FILE", "/tmp/.python365_lease")
-GRACE = float(os.environ.get("PYTHON365_LEASE_GRACE", "6"))   # 离线宽限：TTL 之外还能跑多久
+
+# ⚠️ 宽限期**不再从环境变量读**（第七轮 R7-06）。
+# 它来自服务端签名的租约载荷，客户端只能照做 —— 否则
+# `PYTHON365_LEASE_GRACE=999999999999` 一个环境变量就能让"到期停机"永不触发。
+# 这条规则的教训：**凡是要用来做安全判定的参数，都不能由被判定方声明。**
+_DEFAULT_GRACE = 6.0
 
 
 def fingerprint() -> str:
@@ -91,9 +96,25 @@ def parse_lease(token: str) -> dict | None:
         if fields[0] != "LEASE":
             return None
         return {"lic_id": fields[1], "fp": fields[2], "exp": int(fields[3]),
-                "tiers": [t for t in fields[4].split(",") if t]}
+                "tiers": [t for t in fields[4].split(",") if t],
+                "grace": float(fields[5]) if len(fields) > 5 else _DEFAULT_GRACE}
     except Exception:                                        # noqa: BLE001
         return None
+
+
+def _trusted_now() -> float:
+    """
+    用**可信时间**判定到期（第七轮 R7-06）。
+
+    裸 `time.time()` 只是一个可 patch 的模块属性 —— "到期永不触发"只需要一行。
+    这里复用许可证那套：网络时间 / 高水位 / 本地时钟**取最大**，
+    所以回拨或打桩都不改变结论。
+    """
+    try:
+        from ._license import best_known_now
+        return best_known_now()[0]
+    except Exception:                                        # noqa: BLE001
+        return time.time()
 
 
 class LeaseKeeper:
@@ -104,7 +125,8 @@ class LeaseKeeper:
         self.server = server.rstrip("/")
         self.fp = fingerprint()
         self.license_token = license_token
-        self.interval = interval or max(1.0, (GRACE + 8) / 4)
+        # 续签间隔：按宽限期推（用**服务端签进租约**的那个值，不是本地常量）
+        self.interval = interval or max(1.0, (_DEFAULT_GRACE + 8) / 4)
         self._lock = threading.Lock()
         self._lease: str | None = None
         self._refresh: str | None = None      # 一次性刷新令牌（R6-05）：抓到租约 ≠ 能续期
@@ -137,7 +159,7 @@ class LeaseKeeper:
         elif fields["fp"] != self.fp:
             self._state = {"ok": False, "why": f"租约绑定的是别的设备（{fields['fp'][:8]}…）",
                            "tiers": []}
-        elif fields["exp"] + GRACE < time.time():
+        elif fields["exp"] + fields["grace"] < _trusted_now():
             self._state = {"ok": False, "why": "租约已过期且超出宽限期", "tiers": []}
         else:
             self._state = {"ok": True, "why": "有效", "tiers": fields["tiers"]}

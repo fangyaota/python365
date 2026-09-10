@@ -61,7 +61,6 @@ def env(**extra) -> dict:
     e = dict(os.environ)
     e["PYTHONPATH"] = PY365
     e["PYTHON365_LEASE_FILE"] = LEASE_FILE
-    e["PYTHON365_LEASE_GRACE"] = str(GRACE)
     e.update({k: str(v) for k, v in extra.items()})
     return e
 
