@@ -108,7 +108,7 @@ python365.apply_topup(token)   # 续费：应用**厂商签名的**加油包令�
 | **续费要凭厂商签名令牌**：客户端公开面移除 `set_quota`/`topup`（R3-6） | 用官方 API 自助充值 |
 | **私钥搬出客户端目录树**（默认 `~/.python365-vendor/`，R3-12） | 谁能拿到客户端谁就能签发许可证 |
 
-**防线清单**（第五轮上了租约架构之后重新分类 —— 详见 `exploits/REPORT_LEASE.md`）：
+**防线清单**（第五轮上了租约架构之后重新分类 —— 详见 `exploits/REPORT_ARCH_LEASE.md`）：
 
 | 残留 | 现状 | 靠什么 |
 |---|---|---|
@@ -147,7 +147,7 @@ PYTHONPATH=/workspace/python365 python3 你的程序.py
 | **独立闸门线程**：每 0.5s 查租约 | ⚠️ **不能挂在计费钩子上** —— 计费钩子只在免费版注册，"已付费"进程反而不受吊销约束（实测踩过：吊销后照跑 15 秒） |
 | **`/renew` 先验签**；`/state` 需管理令牌；状态文件只存派生信息 | 服务端不能把"客户端报上来的东西"当成可信输入 —— 否则纯协议一条链就能换到服务端签名的租约（第五轮 R5-05/06/09） |
 
-实测见 `exploits/REPORT_LEASE.md`，一键复现：
+实测见 `exploits/REPORT_ARCH_LEASE.md`，一键复现：
 
 ```bash
 python3 demos/lease_lab.py             # 六个场景：激活 / 换机停机 / 吊销停机 / 断网停机 / 冒用指纹 / 复测老洞
@@ -180,7 +180,8 @@ python3 vendor/issue.py ENTERPRISE 3650  # 自定义有效天数
 | 目录 | 内容 |
 |---|---|
 | `demos/` | 演示脚本（`billing_test.py` 双层计费对决、`demo_app_365.py` 标准库全家桶、`prime_365.py` 质数程序、`net_time_lab.py` 可信时间实验、`dowhen_demo.py` / `hack_lab.py` 裸 dowhen 演示） |
-| `exploits/` | 18 个攻击脚本 + 三套 `run_suite.sh` + 四份报告（`REPORT.md` / `REPORT_ROUND3` / `REPORT_ROUND4` / `REPORT_LEASE`） |
+| `exploits/` | 约 50 个攻击脚本 + **四套 `run_suite.sh`** + 五份报告（`REPORT.md` / `REPORT_ROUND3` / `REPORT_ROUND4` / `REPORT_ROUND5` / `REPORT_ARCH_LEASE`） |
+| `AUDIT.md` | **审计总览**：五个阶段的战绩、攻击面演进主线、全部防线、跨阶段教训 |
 | `vendor/` | 密钥生成 / 发证 / 私钥（**不随客户端分发**） |
 
 ## 已知"特性"
