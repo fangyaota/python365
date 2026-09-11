@@ -1,3 +1,23 @@
+> ### ⚠️ 这是一个**整活 / 教学**项目，不是真产品
+>
+> 「Python 365」把 CPython 改造成订阅制运行时：**标准库按模块卖、语言特性按版本卖、CPU 时间按秒计费**。
+> 免费版带广告、随机数被降级成常量、每 5 万次函数调用断供一次。
+>
+> 它同时带着 **十一轮红队审计**的完整记录（`AUDIT.md` + 六份报告），包括约 65 个**真能跑的绕过脚本** ——
+> 全部针对它自己。这不矛盾：**这个项目一半是产品，一半是"它为什么挡不住"的论证材料。**
+>
+> **30 秒上手**（在项目根目录）：
+> ```bash
+> PYTHONPATH=$PWD python3 demos/demo_app_365.py     # 看免费版撞墙
+> PYTHONPATH=$PWD python3 demos/lease_lab.py        # 看在线租约的六个场景
+> python3 tools/build_release.py                    # 生成客户交付版
+> ```
+>
+> 用途：演示 PEP 669 / [dowhen](https://github.com/gaogaotiantian/dowhen) 能做什么，
+> 以及"本地计费"这类系统的边界在哪。**请勿当作真正的 DRM** —— 结论在 `AUDIT.md` 最后一句。
+
+---
+
 # Python 365 — 订阅制 Python 运行时
 
 用 [dowhen](https://github.com/gaogaotiantian/dowhen) 在解释器启动时把**付费墙挂到语言和标准库上**。
@@ -28,13 +48,13 @@ python365/
 
 ```bash
 # 免费版：任何程序一启动就上锁
-PYTHONPATH=/workspace/python365 python3 你的程序.py
+PYTHONPATH=/path/to/python365 python3 你的程序.py
 
 # 加购（许可证由厂商私钥签发，客户端只有公钥，伪造不了）
-PYTHON365_KEY='PYTHON365.xxx.yyy' PYTHONPATH=/workspace/python365 python3 你的程序.py
+PYTHON365_KEY='PYTHON365.xxx.yyy' PYTHONPATH=/path/to/python365 python3 你的程序.py
 
 # 打开 import 闸门：连 import 都要收费（会打断现有脚本的顶层 import，默认关闭）
-PYTHON365_IMPORT_GATE=1 PYTHONPATH=/workspace/python365 python3 你的程序.py
+PYTHON365_IMPORT_GATE=1 PYTHONPATH=/path/to/python365 python3 你的程序.py
 ```
 
 程序侧只需要一个只读 API：
@@ -144,7 +164,7 @@ PYTHON365_ADMIN_TOKEN='换成你自己的随机串' python3 vendor/authd.py 8787
 # ② 客户端用短周期租约运行（租约默认 8 秒，演示可调 PYTHON365_LEASE_TTL）
 PYTHON365_LEASE_SERVER=http://127.0.0.1:8787 \
 PYTHON365_KEY='PYTHON365.xxx.yyy' \
-PYTHONPATH=/workspace/python365 python3 你的程序.py
+PYTHONPATH=/path/to/python365 python3 你的程序.py
 ```
 
 | 机制 | 治好了什么 |

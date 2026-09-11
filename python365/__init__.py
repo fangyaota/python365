@@ -8,10 +8,10 @@ Python 365 —— 把 CPython 爆改成分级订阅制运行时
 用法
 ----
     # 免费版（任何程序一启动就上锁）
-    PYTHONPATH=/workspace/python365 python3 你的程序.py
+    PYTHONPATH=/path/to/python365 python3 你的程序.py
 
     # 加购（许可证由 vendor/issue.py 用私钥签发，客户端只有公钥，伪造不了）
-    PYTHON365_KEY='PYTHON365.xxx.yyy' PYTHONPATH=/workspace/python365 python3 你的程序.py
+    PYTHON365_KEY='PYTHON365.xxx.yyy' PYTHONPATH=/path/to/python365 python3 你的程序.py
 
 模块地图
 --------

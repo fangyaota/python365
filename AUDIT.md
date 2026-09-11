@@ -117,7 +117,7 @@ bash r5/run_suite.sh    # 第五轮套件  10 项 →  9 守住 / 1 攻破（R5-
 cd ../demos
 python3 lease_lab.py            # 租约六场景：激活 / 换机停机 / 吊销停机 / 断网停机 / 冒用指纹 / 复测老洞
 python3 uid_separation_lab.py   # "私钥到底谁能用"：藏起来 → 客户端照常、厂商签发全瘫
-python3 demo_app_365.py         # 免费版撞 16 道墙（需 PYTHONPATH=/workspace/python365）
+python3 demo_app_365.py         # 免费版撞 16 道墙（需 PYTHONPATH=/path/to/python365）
 ```
 
 ## 6. 跨阶段工程教训
