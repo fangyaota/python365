@@ -11,3 +11,7 @@ private_key.json
 *.topup
 FORGED.*
 *.pyz
+
+# 交付版是**构建产物**（用 tools/build_release.py 重建），不入库
+python365_release/
+python365_release.zip
