@@ -28,10 +28,14 @@ TOKEN = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
 API = "https://api.github.com"
 
 
+# ⚠️ 上传资产走的是 **uploads.github.com**，不是 api.github.com（用错会得到 404）
+UPLOAD_API = "https://uploads.github.com"
+
+
 def api(method: str, path: str, payload: dict | None = None, raw: bytes | None = None,
-        ctype: str = "application/json") -> tuple[int, dict]:
+        ctype: str = "application/json", host: str | None = None) -> tuple[int, dict]:
     data = raw if raw is not None else (json.dumps(payload).encode() if payload else None)
-    req = urllib.request.Request(f"{API}{path}", data=data, method=method,
+    req = urllib.request.Request(f"{host or API}{path}", data=data, method=method,
                                  headers={"Authorization": f"Bearer {TOKEN}",
                                           "Accept": "application/vnd.github+json",
                                           "Content-Type": ctype,
@@ -64,13 +68,21 @@ def main() -> None:
         raise SystemExit(f"建 Release 失败：{code} {rel}")
     print(f"  Release 就绪：{rel['html_url']}")
 
-    with open(zip_path, "rb") as fh:
-        blob = fh.read()
-    code, asset = api("POST", f"/repos/{REPO}/releases/{rel['id']}/assets"
-                             f"?name=python365_release.zip", raw=blob,
-                      ctype="application/zip")
+    def upload(target: dict) -> tuple[int, dict]:
+        with open(zip_path, "rb") as fh:
+            blob = fh.read()
+        return api("POST", f"/repos/{REPO}/releases/{target['id']}/assets"
+                           f"?name=python365_release.zip", raw=blob,
+                   ctype="application/zip", host=UPLOAD_API)
+
+    code, asset = upload(rel)
+    if code == 422:                                   # 同名资产已存在 → 先删再传
+        for existing in rel.get("assets", []):
+            if existing["name"] == "python365_release.zip":
+                api("DELETE", f"/repos/{REPO}/releases/assets/{existing['id']}")
+        code, asset = upload(rel)
     if code >= 300:
-        print(f"  资产上传失败（可能已存在）：{code} {asset.get('errors')}")
+        print(f"  资产上传失败：{code} {asset.get('errors') or asset.get('message')}")
     else:
         print(f"  资产已上传：{asset['name']}（{asset['size'] / 1024:.0f} KB）")
         print(f"  下载地址：{asset['browser_download_url']}")
